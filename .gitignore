@@ -1,0 +1,23 @@
+progress.md
+claude.md*
+
+# raw dataset excluded from VCS (23MB+); see README for download/placement
+!data/
+data/*
+!data/.gitkeep
+
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+logs/
+plugins/
+docker/logs/
+
+.DS_Store
+
+*.sql.gz
+*.dump
+backups/
