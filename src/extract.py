@@ -48,6 +48,22 @@ def extract(source_path: str | Path | None = None) -> pd.DataFrame:
         )
 
     df = df[REQUIRED_COLUMNS].copy()
+
+    # Every text column here can come back from openpyxl with mixed
+    # Python types in the same column — a numeric-looking value (a stock
+    # code like 20713, or even a purely numeric Description) reads as
+    # int, an alphanumeric one (85123A, C536379) reads as str. That's
+    # tolerable in a DataFrame but breaks Parquet (via pyarrow, which
+    # needs one type per column) the moment run() tries to persist this
+    # intermediate file — confirmed by hitting this for InvoiceNo,
+    # StockCode, AND Description in turn. Normalised here, immediately
+    # after reading, rather than downstream in transform.py, since the
+    # failure happens before transform.py ever runs. NaN is left alone
+    # (not stringified to the literal "nan") so missing-value checks
+    # downstream still see real missing values.
+    for col in ("InvoiceNo", "StockCode", "Description", "Country"):
+        df[col] = df[col].apply(lambda v: str(v) if pd.notna(v) else v)
+
     df.insert(0, "source_row_number", range(1, len(df) + 1))
 
     logger.info("Extracted %d records from %s", len(df), path)
