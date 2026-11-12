@@ -109,6 +109,14 @@ def transform(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     )
     clean["country_name"] = clean["Country"].astype(str).str.strip()
 
+    # The source file is inconsistent about StockCode's type: numeric-looking
+    # codes (e.g. 20713) come back from openpyxl as Python int, while
+    # alphanumeric ones (e.g. 85123A) come back as str. Left alone, that
+    # mismatch breaks every later dict-based lookup keyed on stock_code
+    # (int 20713 != str "20713"), so it's normalised to str exactly once,
+    # here, before stock_code is used as a key anywhere downstream.
+    clean["StockCode"] = clean["StockCode"].astype(str)
+
     clean_df = clean.rename(
         columns={
             "invoice_no_clean": "invoice_no",

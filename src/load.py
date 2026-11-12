@@ -36,6 +36,11 @@ STAGING_COPY_COLUMNS = [
 ]
 
 
+def _chunked(records: list[dict], size: int):
+    for i in range(0, len(records), size):
+        yield records[i : i + size]
+
+
 def _row_to_native(row) -> tuple:
     return (
         int(row.source_row_number),
@@ -136,20 +141,35 @@ def load_transactions(engine: Engine, clean_df: pd.DataFrame) -> dict[str, int]:
         )
         .rename(columns={"invoice_no": "invoice_number"})
     )
-    invoices_agg["customer_id"] = invoices_agg["customer_id"].where(invoices_agg["customer_id"].notna(), None)
 
+    # Converted record-by-record rather than via DataFrame .where(): a
+    # float64 column stays float64 even after .where(cond, None), so a
+    # missing customer_id comes back as NaN again, not real None — and
+    # psycopg casting a NaN to ::INTEGER raises "integer out of range" in
+    # Postgres. Building plain Python ints/None here sidesteps that.
+    invoice_records = []
+    for row in invoices_agg.to_dict(orient="records"):
+        row["country_id"] = int(row["country_id"])
+        row["customer_id"] = None if pd.isna(row["customer_id"]) else int(row["customer_id"])
+        row["is_cancelled"] = bool(row["is_cancelled"])
+        invoice_records.append(row)
+
+    # Batched: Postgres caps a single query at 65535 bound parameters, and
+    # one multi-row INSERT for every distinct invoice (5 columns each)
+    # blows past that once there are more than ~13k invoices.
     with engine.begin() as conn:
-        stmt = pg_insert(invoices_t).values(invoices_agg.to_dict(orient="records"))
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["invoice_number"],
-            set_={
-                "customer_id": stmt.excluded.customer_id,
-                "country_id": stmt.excluded.country_id,
-                "invoice_date": stmt.excluded.invoice_date,
-                "is_cancelled": stmt.excluded.is_cancelled,
-            },
-        )
-        conn.execute(stmt)
+        for batch in _chunked(invoice_records, 1000):
+            stmt = pg_insert(invoices_t).values(batch)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["invoice_number"],
+                set_={
+                    "customer_id": stmt.excluded.customer_id,
+                    "country_id": stmt.excluded.country_id,
+                    "invoice_date": stmt.excluded.invoice_date,
+                    "is_cancelled": stmt.excluded.is_cancelled,
+                },
+            )
+            conn.execute(stmt)
         invoice_map = dict(conn.execute(select(invoices_t.c.invoice_number, invoices_t.c.invoice_id)).all())
 
     invoice_items_rows = clean_df[["source_row_number", "invoice_no", "stock_code", "quantity", "unit_price"]].copy()
