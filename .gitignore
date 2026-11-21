@@ -1,4 +1,5 @@
 progress.md
+docs/
 
 # raw dataset excluded from VCS (23MB+); see README for download/placement
 !data/
