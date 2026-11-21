@@ -87,8 +87,9 @@ erDiagram
 ```
 
 3NF for the transactional tables; `daily_sales_summary` is a deliberate
-denormalised reporting rollup. Full rationale in
-[docs/er_diagram.md](docs/er_diagram.md).
+denormalised reporting rollup, refreshed wholesale rather than kept
+normalised, since recomputing it from 500k+ raw rows on every dashboard
+load would be wasted work once a day's numbers are final.
 
 ## Business problem
 
@@ -183,10 +184,12 @@ excludes cancelled invoices and keeps legitimate returns, consistently.
 ## Performance
 
 Indexes were added *after* measuring a baseline, not before. Two
-selective queries got 6-9x faster; three full-table aggregation queries
-showed no real improvement, because indexing can't help a query that has
-to touch nearly every row anyway. Full measured results, real
-`EXPLAIN ANALYZE` output, and the reasoning: [docs/performance_analysis.md](docs/performance_analysis.md).
+selective queries (an invoice date-range filter, a single customer's
+invoices) got 6-9x faster. Three full-table aggregation queries (top
+products, revenue by country, the full daily rollup) showed no real
+improvement, because indexing can't help a query that has to touch
+nearly every row anyway — confirmed with real `EXPLAIN (ANALYZE, BUFFERS)`
+output before and after, not assumed.
 
 ## Backup & recovery
 
@@ -195,7 +198,11 @@ to touch nearly every row anyway. Full measured results, real
 ./scripts/restore.sh backups/retail_db_<ts>.dump  # restores + verifies row counts
 ```
 
-Details: [docs/recovery_guide.md](docs/recovery_guide.md).
+`backup.sh` runs `pg_dump -F c` inside the running `postgres` container
+(no local `pg_dump` install assumed) and writes a timestamped dump to
+`backups/` (gitignored). `restore.sh` runs `pg_restore --clean --if-exists`
+and then verifies the restore actually landed data by checking
+`invoice_items`'s row count — not just trusting a 0 exit code.
 
 ## Project structure
 
@@ -205,8 +212,6 @@ src/                          extract, transform, load, validation, database
 sql/                           schema, tables, indexes, views, procedures, analytics
 scripts/                       backup.sh, restore.sh
 tests/                         pytest suite (34 tests)
-docs/                          architecture, data dictionary, ER diagram,
-                               performance analysis, recovery guide
 docker-compose.yaml            Postgres + 5-service Airflow stack
 Dockerfile                     extends apache/airflow:3.4.0 with this project's deps
 ```
@@ -221,7 +226,7 @@ via a client, `EXPLAIN ANALYZE` output before/after indexing._
 - Scheduled backups (currently manual, via `backup.sh`)
 - A materialised rollup for top-products/revenue-by-country, the way
   `daily_sales_summary` already works, since those queries don't benefit
-  from indexing alone (see [docs/performance_analysis.md](docs/performance_analysis.md))
+  from indexing alone
 - CI (GitHub Actions) running `pytest` on every push
 - Splitting Airflow's metadata database from `retail_db` onto separate
   Postgres instances, the way a production deployment would
